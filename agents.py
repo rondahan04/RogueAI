@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from typing import Optional
 
 from pydantic_ai import Agent
 
 from models import AgentAction, GameState, GMDecision, Player, PlayerRole
 
+_MODEL = os.getenv("OPENAI_MODEL", "openai:gpt-4o")
 
 # ---------------------------------------------------------------------------
-# Player Agent
+# Player Agent — lazy singleton
 # One shared instance. Called once per alive player per turn.
 # Player identity is passed in the user-message prompt string.
 # ---------------------------------------------------------------------------
@@ -37,19 +40,6 @@ Rules:
 - stay_silent is valid if acting would be suspicious.
 """.strip()
 
-player_agent: Agent[GameState, AgentAction] = Agent(
-    "openai:gpt-4o",
-    deps_type=GameState,
-    output_type=AgentAction,
-    system_prompt=_PLAYER_SYSTEM_PROMPT,
-)
-
-
-# ---------------------------------------------------------------------------
-# Game Master Agent
-# Evaluates GameState after each exploration round and after votes.
-# ---------------------------------------------------------------------------
-
 _GM_SYSTEM_PROMPT = """
 You are the Game Master for ROGUE, a social deduction SMS game.
 
@@ -72,12 +62,32 @@ Be dramatic. The human should feel tension.
 Always set outcome to a short announcement suitable for SMS (under 100 chars).
 """.strip()
 
-game_master_agent: Agent[GameState, GMDecision] = Agent(
-    "openai:gpt-4o",
-    deps_type=GameState,
-    output_type=GMDecision,
-    system_prompt=_GM_SYSTEM_PROMPT,
-)
+_player_agent: Optional[Agent[GameState, AgentAction]] = None
+_gm_agent: Optional[Agent[GameState, GMDecision]] = None
+
+
+def player_agent() -> Agent[GameState, AgentAction]:
+    global _player_agent
+    if _player_agent is None:
+        _player_agent = Agent(
+            _MODEL,
+            deps_type=GameState,
+            output_type=AgentAction,
+            system_prompt=_PLAYER_SYSTEM_PROMPT,
+        )
+    return _player_agent
+
+
+def game_master_agent() -> Agent[GameState, GMDecision]:
+    global _gm_agent
+    if _gm_agent is None:
+        _gm_agent = Agent(
+            _MODEL,
+            deps_type=GameState,
+            output_type=GMDecision,
+            system_prompt=_GM_SYSTEM_PROMPT,
+        )
+    return _gm_agent
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +107,7 @@ async def run_player_turn(player: Player, state: GameState) -> AgentAction:
         f"Take your turn now."
     )
     try:
-        result = await player_agent.run(prompt, deps=state)
+        result = await player_agent().run(prompt, deps=state)
         return result.output
     except Exception as exc:
         print(f"[agent error] {player.name}: {exc}")
@@ -121,7 +131,7 @@ async def broadcast_ai_turns(state: GameState) -> list[tuple[Player, AgentAction
 async def run_game_master(state: GameState) -> GMDecision:
     """Ask the GM what happens after the current round."""
     try:
-        result = await game_master_agent.run(
+        result = await game_master_agent().run(
             "Evaluate the current game state and decide what happens next.",
             deps=state,
         )
