@@ -4,7 +4,7 @@ import asyncio
 import os
 import random
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -126,7 +126,7 @@ async def send_system(state: GameState, body: str) -> None:
             sender_name="SYSTEM",
             sender_number=state.system_phone_number,
             content=body,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
     )
 
@@ -140,7 +140,7 @@ async def send_player_action(state: GameState, player: Player, action) -> None:
             sender_name=player.name,
             sender_number=player.saperly_number,
             content=action.message_to_send,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             is_private=(action.action_type == "private_manipulate"),
             internal_reasoning=action.internal_reasoning,
         )
@@ -305,7 +305,7 @@ async def _handle_inbound(sender: str, body: str) -> None:
             sender_name="HUMAN",
             sender_number=sender,
             content=body,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
     )
 

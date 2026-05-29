@@ -17,7 +17,7 @@ At game end, you receive a link to **The Receipts** — a web page revealing wha
 - **[pydantic-ai](https://github.com/pydantic/pydantic-ai)** — strict-output AI agents (no raw LLM strings)
 - **FastAPI + uvicorn** — webhook receiver and Receipts page
 - **Saperly** (or Twilio fallback) — SMS provisioning and delivery
-- **OpenAI gpt-4o / gpt-5.5** — agent brains
+- **OpenAI gpt-4o** (default) or any pydantic-ai compatible model via `OPENAI_MODEL`
 
 ## Development setup
 
