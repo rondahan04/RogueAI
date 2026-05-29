@@ -8,7 +8,7 @@ from pydantic_ai import Agent
 
 from models import AgentAction, GameState, GMDecision, Player, PlayerRole
 
-_MODEL = os.getenv("OPENAI_MODEL", "openai:gpt-4o")
+_MODEL = os.getenv("OPENAI_MODEL", "openai:gpt-5.5")
 
 # ---------------------------------------------------------------------------
 # Player Agent — lazy singleton
