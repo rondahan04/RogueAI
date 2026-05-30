@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from agents import broadcast_ai_turns, run_game_master
@@ -414,3 +414,586 @@ async def receipts(game_id: str):
 </body>
 </html>"""
     return html
+
+
+# ---------------------------------------------------------------------------
+# Dashboard — live game view
+# ---------------------------------------------------------------------------
+
+@app.get("/api/game/{game_id}")
+async def api_game_state(game_id: str):
+    state = games.get(game_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return JSONResponse({
+        "game_id": state.game_id,
+        "phase": state.phase.value,
+        "round_num": state.round_num,
+        "is_processing": state.is_processing,
+        "players": [
+            {
+                "name": p.name,
+                "role": p.role.value,
+                "personality": p.personality,
+                "is_alive": p.is_alive,
+            }
+            for p in state.players
+        ],
+        "chat_history": [
+            {
+                "sender_name": msg.sender_name,
+                "content": msg.content,
+                "timestamp": msg.timestamp.strftime("%H:%M:%S"),
+                "is_private": msg.is_private,
+                "internal_reasoning": msg.internal_reasoning,
+            }
+            for msg in state.chat_history
+        ],
+    })
+
+
+@app.get("/dashboard/{game_id}", response_class=HTMLResponse)
+async def dashboard(game_id: str):
+    state = games.get(game_id)
+    if not state:
+        return HTMLResponse(
+            status_code=404,
+            content="""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ROGUE — Game Not Found</title>
+<style>
+  body{background:#0F172A;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}
+  h1{color:#D97706;}p{color:#94a3b8;}
+</style>
+</head>
+<body><div style="text-align:center"><h1>Game Not Found</h1><p>No game found for this ID.</p></div></body>
+</html>""",
+        )
+
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ROGUE — Live Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Josefin+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{{
+    --bg: #0F172A;
+    --surface: #1E293B;
+    --surface2: #0f1e33;
+    --border: rgba(255,255,255,0.08);
+    --amber: #D97706;
+    --amber-light: #F59E0B;
+    --indigo: #6366F1;
+    --red: #EF4444;
+    --green: #22C55E;
+    --muted: #64748B;
+    --text: #F1F5F9;
+    --text-dim: #94A3B8;
+  }}
+  *{{box-sizing:border-box;margin:0;padding:0;}}
+  body{{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Josefin Sans',sans-serif;
+    font-size:14px;
+    min-height:100vh;
+  }}
+
+  /* ── HEADER ── */
+  header{{
+    background:var(--surface);
+    border-bottom:1px solid var(--border);
+    padding:16px 24px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    position:sticky;
+    top:0;
+    z-index:100;
+  }}
+  .logo{{
+    font-family:'Cinzel',serif;
+    font-size:20px;
+    font-weight:700;
+    letter-spacing:0.15em;
+    color:var(--amber);
+    text-shadow:0 0 20px rgba(217,119,6,0.5);
+  }}
+  .logo span{{color:var(--text-dim);font-size:12px;font-family:'Josefin Sans',sans-serif;margin-left:12px;letter-spacing:0.05em;font-weight:300;}}
+  .header-right{{display:flex;align-items:center;gap:12px;}}
+  .phase-badge{{
+    padding:4px 12px;
+    border-radius:20px;
+    font-size:11px;
+    font-weight:600;
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+  }}
+  .phase-EXPLORATION{{background:rgba(99,102,241,0.2);color:#818CF8;border:1px solid rgba(99,102,241,0.4);}}
+  .phase-EMERGENCY_MEETING{{background:rgba(239,68,68,0.2);color:#FCA5A5;border:1px solid rgba(239,68,68,0.4);animation:pulse-red 1.5s ease-in-out infinite;}}
+  .phase-VOTING{{background:rgba(217,119,6,0.2);color:#FCD34D;border:1px solid rgba(217,119,6,0.4);animation:pulse-amber 1.5s ease-in-out infinite;}}
+  .phase-GAME_OVER{{background:rgba(100,116,139,0.2);color:#94A3B8;border:1px solid rgba(100,116,139,0.4);}}
+  .round-indicator{{
+    font-size:12px;
+    color:var(--text-dim);
+    font-weight:500;
+    letter-spacing:0.05em;
+  }}
+  .live-dot{{
+    width:8px;height:8px;border-radius:50%;
+    background:var(--green);
+    box-shadow:0 0 8px rgba(34,197,94,0.8);
+    animation:pulse-green 2s ease-in-out infinite;
+    display:inline-block;
+    margin-right:6px;
+  }}
+  .live-dot.processing{{background:var(--amber);box-shadow:0 0 8px rgba(217,119,6,0.8);animation:pulse-amber-dot 0.8s ease-in-out infinite;}}
+  .live-dot.offline{{background:var(--muted);box-shadow:none;animation:none;}}
+
+  /* ── LAYOUT ── */
+  .layout{{
+    display:grid;
+    grid-template-columns:1fr 380px;
+    grid-template-rows:auto 1fr;
+    gap:1px;
+    background:var(--border);
+    height:calc(100vh - 57px);
+  }}
+  .panel{{background:var(--bg);overflow:hidden;}}
+  .panel-header{{
+    padding:14px 20px;
+    border-bottom:1px solid var(--border);
+    font-family:'Cinzel',serif;
+    font-size:11px;
+    font-weight:600;
+    letter-spacing:0.2em;
+    color:var(--text-dim);
+    text-transform:uppercase;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+  }}
+  .panel-header .count{{
+    font-family:'Josefin Sans',sans-serif;
+    font-size:11px;
+    font-weight:500;
+    color:var(--text-dim);
+    background:var(--surface);
+    padding:2px 8px;
+    border-radius:10px;
+    letter-spacing:0;
+  }}
+
+  /* ── STATS BAR ── */
+  .stats-bar{{
+    grid-column:1/-1;
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    background:var(--surface2);
+    border-bottom:1px solid var(--border);
+  }}
+  .stat{{
+    padding:14px 20px;
+    border-right:1px solid var(--border);
+    display:flex;
+    flex-direction:column;
+    gap:3px;
+  }}
+  .stat:last-child{{border-right:none;}}
+  .stat-label{{
+    font-size:10px;
+    font-weight:600;
+    letter-spacing:0.15em;
+    text-transform:uppercase;
+    color:var(--muted);
+  }}
+  .stat-value{{
+    font-family:'Cinzel',serif;
+    font-size:24px;
+    font-weight:700;
+    color:var(--text);
+    line-height:1;
+  }}
+  .stat-value.amber{{color:var(--amber);text-shadow:0 0 16px rgba(217,119,6,0.4);}}
+  .stat-value.red{{color:var(--red);text-shadow:0 0 16px rgba(239,68,68,0.4);}}
+  .stat-value.green{{color:var(--green);text-shadow:0 0 16px rgba(34,197,94,0.4);}}
+
+  /* ── PLAYERS GRID ── */
+  .players-panel{{grid-row:2;overflow-y:auto;}}
+  .players-grid{{
+    display:grid;
+    grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+    gap:12px;
+    padding:16px;
+  }}
+  .player-card{{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:16px;
+    transition:border-color 0.2s ease,box-shadow 0.2s ease;
+    cursor:default;
+    position:relative;
+    overflow:hidden;
+  }}
+  .player-card::before{{
+    content:'';
+    position:absolute;
+    top:0;left:0;right:0;
+    height:2px;
+  }}
+  .player-card.crewmate::before{{background:linear-gradient(90deg,var(--indigo),transparent);}}
+  .player-card.imposter::before{{background:linear-gradient(90deg,var(--red),transparent);}}
+  .player-card.ejected{{
+    opacity:0.4;
+    filter:grayscale(0.8);
+  }}
+  .player-card:hover:not(.ejected){{
+    border-color:rgba(255,255,255,0.15);
+    box-shadow:0 4px 24px rgba(0,0,0,0.4);
+  }}
+  .player-top{{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;}}
+  .player-name{{
+    font-family:'Cinzel',serif;
+    font-size:15px;
+    font-weight:600;
+    color:var(--text);
+  }}
+  .player-status-icon{{font-size:16px;line-height:1;}}
+  .player-role{{
+    display:inline-block;
+    font-size:9px;
+    font-weight:700;
+    letter-spacing:0.15em;
+    text-transform:uppercase;
+    padding:2px 8px;
+    border-radius:4px;
+    margin-bottom:8px;
+  }}
+  .role-CREWMATE{{background:rgba(99,102,241,0.15);color:#818CF8;border:1px solid rgba(99,102,241,0.3);}}
+  .role-IMPOSTER{{background:rgba(239,68,68,0.15);color:#FCA5A5;border:1px solid rgba(239,68,68,0.3);}}
+  .player-personality{{
+    font-size:11px;
+    color:var(--text-dim);
+    font-weight:300;
+    font-style:italic;
+  }}
+
+  /* ── CHAT FEED ── */
+  .chat-panel{{grid-row:2;display:flex;flex-direction:column;overflow:hidden;}}
+  .chat-feed{{
+    flex:1;
+    overflow-y:auto;
+    padding:12px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    scroll-behavior:smooth;
+  }}
+  .chat-msg{{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:12px;
+    animation:slide-in 0.25s ease-out;
+  }}
+  .chat-msg.private{{
+    border-color:rgba(239,68,68,0.3);
+    background:rgba(239,68,68,0.04);
+  }}
+  .chat-msg.system{{
+    border-color:rgba(99,102,241,0.3);
+    background:rgba(99,102,241,0.04);
+  }}
+  .chat-msg.human{{
+    border-color:rgba(34,197,94,0.3);
+    background:rgba(34,197,94,0.04);
+  }}
+  .msg-header{{display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;}}
+  .msg-sender{{font-weight:600;font-size:12px;color:var(--text);}}
+  .msg-time{{font-size:10px;color:var(--muted);margin-left:auto;}}
+  .msg-badge{{
+    font-size:9px;
+    font-weight:700;
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+    padding:1px 6px;
+    border-radius:3px;
+  }}
+  .badge-private{{background:rgba(239,68,68,0.2);color:#FCA5A5;}}
+  .badge-system{{background:rgba(99,102,241,0.2);color:#818CF8;}}
+  .badge-human{{background:rgba(34,197,94,0.2);color:#86EFAC;}}
+  .msg-content{{
+    font-size:13px;
+    color:var(--text-dim);
+    line-height:1.5;
+    word-break:break-word;
+  }}
+  .msg-reasoning{{
+    margin-top:8px;
+    padding:8px 10px;
+    background:rgba(0,0,0,0.3);
+    border-left:2px solid var(--amber);
+    border-radius:0 6px 6px 0;
+    font-size:11px;
+    color:var(--muted);
+    font-style:italic;
+    line-height:1.5;
+  }}
+  .msg-reasoning-label{{
+    font-size:9px;
+    font-weight:700;
+    letter-spacing:0.1em;
+    color:var(--amber);
+    text-transform:uppercase;
+    margin-bottom:4px;
+    font-style:normal;
+  }}
+  .empty-chat{{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    height:100%;
+    color:var(--muted);
+    gap:8px;
+  }}
+  .empty-chat svg{{opacity:0.3;}}
+
+  /* ── SCROLLBAR ── */
+  ::-webkit-scrollbar{{width:4px;}}
+  ::-webkit-scrollbar-track{{background:transparent;}}
+  ::-webkit-scrollbar-thumb{{background:var(--border);border-radius:2px;}}
+  ::-webkit-scrollbar-thumb:hover{{background:rgba(255,255,255,0.15);}}
+
+  /* ── ANIMATIONS ── */
+  @keyframes pulse-red{{0%,100%{{box-shadow:0 0 0 0 rgba(239,68,68,0);}}50%{{box-shadow:0 0 0 4px rgba(239,68,68,0.2);}}}}
+  @keyframes pulse-amber{{0%,100%{{box-shadow:0 0 0 0 rgba(217,119,6,0);}}50%{{box-shadow:0 0 0 4px rgba(217,119,6,0.2);}}}}
+  @keyframes pulse-green{{0%,100%{{opacity:1;}}50%{{opacity:0.4;}}}}
+  @keyframes pulse-amber-dot{{0%,100%{{opacity:1;transform:scale(1);}}50%{{opacity:0.6;transform:scale(0.8);}}}}
+  @keyframes slide-in{{from{{opacity:0;transform:translateY(6px);}}to{{opacity:1;transform:translateY(0);}}}}
+
+  @media(prefers-reduced-motion:reduce){{
+    *{{animation:none!important;transition:none!important;}}
+  }}
+
+  /* ── RESPONSIVE ── */
+  @media(max-width:768px){{
+    .layout{{grid-template-columns:1fr;grid-template-rows:auto auto 1fr;height:auto;}}
+    .players-panel{{grid-row:auto;max-height:400px;}}
+    .chat-panel{{grid-row:auto;height:60vh;}}
+    .stats-bar{{grid-template-columns:repeat(2,1fr);}}
+  }}
+  @media(max-width:480px){{
+    .stats-bar{{grid-template-columns:repeat(2,1fr);}}
+    .players-grid{{grid-template-columns:1fr 1fr;}}
+    header{{padding:12px 16px;}}
+    .logo{{font-size:16px;}}
+  }}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    ROGUE
+    <span>THE GAME</span>
+  </div>
+  <div class="header-right">
+    <div id="phase-badge" class="phase-badge phase-EXPLORATION">Exploration</div>
+    <div id="round-badge" class="round-indicator">Round <span id="round-num">1</span></div>
+    <div>
+      <span id="live-dot" class="live-dot"></span>
+      <span id="live-label" style="font-size:11px;color:var(--text-dim);font-weight:500;">Live</span>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+
+  <div class="stats-bar" id="stats-bar">
+    <div class="stat">
+      <div class="stat-label">Alive</div>
+      <div class="stat-value green" id="stat-alive">8</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Ejected</div>
+      <div class="stat-value red" id="stat-ejected">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Imposters</div>
+      <div class="stat-value amber" id="stat-imposters">2</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Messages</div>
+      <div class="stat-value" id="stat-messages">0</div>
+    </div>
+  </div>
+
+  <div class="panel players-panel">
+    <div class="panel-header">
+      Players
+      <span class="count" id="player-count">8 active</span>
+    </div>
+    <div class="players-grid" id="players-grid">
+    </div>
+  </div>
+
+  <div class="panel chat-panel">
+    <div class="panel-header">
+      Live Feed
+      <span class="count" id="msg-count">0 messages</span>
+    </div>
+    <div class="chat-feed" id="chat-feed">
+      <div class="empty-chat" id="empty-state">
+        <svg width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/></svg>
+        <span style="font-size:12px;">Waiting for messages...</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const GAME_ID = "{game_id}";
+let lastMsgCount = 0;
+let isAutoScrolling = true;
+
+const chatFeed = document.getElementById('chat-feed');
+chatFeed.addEventListener('scroll', () => {{
+  const atBottom = chatFeed.scrollHeight - chatFeed.scrollTop - chatFeed.clientHeight < 60;
+  isAutoScrolling = atBottom;
+}});
+
+const PHASE_LABELS = {{
+  EXPLORATION: 'Exploration',
+  EMERGENCY_MEETING: 'Emergency!',
+  VOTING: 'Voting',
+  GAME_OVER: 'Game Over',
+}};
+
+function renderPlayers(players) {{
+  const grid = document.getElementById('players-grid');
+  const alive = players.filter(p => p.is_alive).length;
+  const ejected = players.filter(p => !p.is_alive).length;
+  const imposters = players.filter(p => p.role === 'IMPOSTER' && p.is_alive).length;
+
+  document.getElementById('stat-alive').textContent = alive;
+  document.getElementById('stat-ejected').textContent = ejected;
+  document.getElementById('stat-imposters').textContent = imposters;
+  document.getElementById('player-count').textContent = `${{alive}} active`;
+
+  grid.innerHTML = players.map(p => `
+    <div class="player-card ${{p.role.toLowerCase()}} ${{p.is_alive ? '' : 'ejected'}}">
+      <div class="player-top">
+        <div class="player-name">${{p.name}}</div>
+        <div class="player-status-icon">${{p.is_alive ? '●' : '✕'}}</div>
+      </div>
+      <div class="player-role role-${{p.role}}">${{p.role}}</div>
+      <div class="player-personality">${{p.personality}}</div>
+    </div>
+  `).join('');
+}}
+
+function renderChat(messages) {{
+  const feed = document.getElementById('chat-feed');
+  const emptyState = document.getElementById('empty-state');
+  const msgCount = document.getElementById('msg-count');
+  const statMessages = document.getElementById('stat-messages');
+
+  msgCount.textContent = `${{messages.length}} messages`;
+  statMessages.textContent = messages.length;
+
+  if (messages.length === 0) {{
+    emptyState.style.display = 'flex';
+    return;
+  }}
+  emptyState.style.display = 'none';
+
+  if (messages.length === lastMsgCount) return;
+
+  const newMessages = messages.slice(lastMsgCount);
+  lastMsgCount = messages.length;
+
+  newMessages.forEach(msg => {{
+    const cls = msg.sender_name === 'SYSTEM' ? 'system'
+              : msg.sender_name === 'HUMAN' ? 'human'
+              : msg.is_private ? 'private' : '';
+
+    const badge = msg.sender_name === 'SYSTEM'
+      ? '<span class="msg-badge badge-system">System</span>'
+      : msg.sender_name === 'HUMAN'
+      ? '<span class="msg-badge badge-human">Human</span>'
+      : msg.is_private
+      ? '<span class="msg-badge badge-private">Private</span>'
+      : '';
+
+    const reasoning = msg.internal_reasoning
+      ? `<div class="msg-reasoning"><div class="msg-reasoning-label">AI Reasoning</div>${{msg.internal_reasoning}}</div>`
+      : '';
+
+    const el = document.createElement('div');
+    el.className = `chat-msg ${{cls}}`;
+    el.innerHTML = `
+      <div class="msg-header">
+        <span class="msg-sender">${{msg.sender_name}}</span>
+        ${{badge}}
+        <span class="msg-time">${{msg.timestamp}}</span>
+      </div>
+      <div class="msg-content">${{msg.content}}</div>
+      ${{reasoning}}
+    `;
+    feed.appendChild(el);
+  }});
+
+  if (isAutoScrolling) {{
+    feed.scrollTop = feed.scrollHeight;
+  }}
+}}
+
+function updatePhase(phase, roundNum, isProcessing) {{
+  const badge = document.getElementById('phase-badge');
+  badge.className = `phase-badge phase-${{phase}}`;
+  badge.textContent = PHASE_LABELS[phase] || phase;
+  document.getElementById('round-num').textContent = roundNum;
+
+  const dot = document.getElementById('live-dot');
+  const label = document.getElementById('live-label');
+  if (phase === 'GAME_OVER') {{
+    dot.className = 'live-dot offline';
+    label.textContent = 'Ended';
+  }} else if (isProcessing) {{
+    dot.className = 'live-dot processing';
+    label.textContent = 'Processing';
+  }} else {{
+    dot.className = 'live-dot';
+    label.textContent = 'Live';
+  }}
+}}
+
+async function poll() {{
+  try {{
+    const res = await fetch(`/api/game/${{GAME_ID}}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    updatePhase(data.phase, data.round_num, data.is_processing);
+    renderPlayers(data.players);
+    renderChat(data.chat_history);
+  }} catch(e) {{
+    console.error('Poll error:', e);
+  }}
+}}
+
+poll();
+const interval = setInterval(poll, 3000);
+</script>
+</body>
+</html>""")
+
