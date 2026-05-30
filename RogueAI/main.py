@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
 import random
 import uuid
 from datetime import datetime, timezone
