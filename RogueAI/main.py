@@ -329,7 +329,26 @@ def _find_game_for_phone(phone: str) -> GameState | None:
 async def receipts(game_id: str):
     state = games.get(game_id)
     if not state:
-        raise HTTPException(status_code=404, detail="Game not found")
+        return HTMLResponse(
+            status_code=404,
+            content="""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ROGUE — Game Not Found</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 720px; margin: 40px auto; padding: 0 20px; background: #fafafa; }
+  h1 { color: #2c3e50; }
+  p { color: #666; }
+</style>
+</head>
+<body>
+<h1>🕵️ ROGUE — Game Not Found</h1>
+<p>No game found for this ID. The game may have ended or the link may be incorrect.</p>
+</body>
+</html>""",
+        )
 
     rows = []
     for msg in state.chat_history:
