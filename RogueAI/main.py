@@ -81,6 +81,12 @@ _NAMES = ["Alex", "Maria", "Jordan", "Sam", "Chris", "Taylor", "Morgan", "Riley"
 app = FastAPI(title="ROGUE")
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    from fastapi.responses import Response
+    return Response(status_code=204)
+
+
 # ---------------------------------------------------------------------------
 # Game initialisation
 # ---------------------------------------------------------------------------
@@ -335,6 +341,7 @@ async def receipts(game_id: str):
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ROGUE — Game Not Found</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -388,6 +395,7 @@ async def receipts(game_id: str):
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ROGUE — The Receipts</title>
 <style>
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
