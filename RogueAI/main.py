@@ -37,7 +37,7 @@ MAX_EXPLORATION_ROUNDS = int(os.getenv("MAX_EXPLORATION_ROUNDS", "3"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 _sms_config: dict[str, Any] = {
-    "mock_webhook_url": "http://localhost:8000/internal/mock-webhook",
+    "mock_webhook_url": os.getenv("BASE_URL", "http://localhost:8001") + "/internal/mock-webhook",
     "saperly_api_key": os.getenv("SAPERLY_API_KEY", ""),
     "system_phone_number": SYSTEM_PHONE_NUMBER,
     "twilio_account_sid": os.getenv("TWILIO_ACCOUNT_SID", ""),
@@ -237,7 +237,7 @@ async def resolve_vote(state: GameState, voted_name: str) -> None:
 
 async def end_game(state: GameState, announcement: str) -> None:
     state.phase = GamePhase.GAME_OVER
-    receipts_url = os.getenv("BASE_URL", "http://localhost:8000") + f"/receipts/{state.game_id}"
+    receipts_url = os.getenv("BASE_URL", "http://localhost:8001") + f"/receipts/{state.game_id}"
     await send_system(state, f"{announcement}")
     await send_system(state, f"Game Over. View the AI's secret thoughts: {receipts_url}")
 
