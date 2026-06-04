@@ -1192,20 +1192,32 @@ const stars = Array.from({length:200}, () => ({
   da: (Math.random() * 0.007 + 0.002) * (Math.random() > .5 ? 1 : -1)
 }));
 
-// Crewmate data
-const HUE_OFFSETS = [0, 220, 120, 280, 50, 25, 320, 180]; // red,blue,green,purple,yellow,orange,pink,cyan
-const crews = HUE_OFFSETS.map(h => ({
-  x: Math.random() * innerWidth,
-  y: innerHeight * 0.55 + Math.random() * innerHeight * 0.38,
-  vx: (Math.random() * 0.55 + 0.28) * (Math.random() > .5 ? 1 : -1),
-  bob: Math.random() * Math.PI * 2,
-  hue: h,
-  dead: false,
-  sz: 50 + Math.random() * 18
-}));
+// Crewmate data — 26 unique crewmates floating across full screen
+const ALL_HUES = [0, 220, 120, 280, 50, 25, 320, 180, 160, 200, 260, 340,
+                  10, 240, 100, 300, 70, 40, 190, 270, 80, 150, 230, 350, 15, 195];
+
+function makeCrewmate(hue) {
+  const sz = 28 + Math.random() * 32; // varied sizes: 28-60px (depth illusion)
+  return {
+    x: Math.random() * innerWidth,
+    y: Math.random() * innerHeight,         // full screen, not just bottom
+    vx: (Math.random() * 0.5 + 0.18) * (Math.random() > .5 ? 1 : -1),
+    vy: (Math.random() * 0.22 - 0.11),      // slow vertical drift in space
+    spin: (Math.random() - 0.5) * 0.012,    // gentle tumble
+    angle: Math.random() * Math.PI * 2,
+    hue,
+    dead: false,
+    sz,
+    alpha: 0.45 + Math.random() * 0.3       // varied opacity for depth
+  };
+}
+const crews = ALL_HUES.map(makeCrewmate);
 
 const playerImg = new Image();
-playerImg.src = '/static/crew.png';
+playerImg.src = '/static/single_crew.png';
+
+// single_crew.png is 178×264 — aspect ratio ~0.674 (width/height)
+const CREW_W_RATIO = 178 / 264;
 
 function drawFrame() {
   // Background gradient
@@ -1225,23 +1237,31 @@ function drawFrame() {
     ctx.fill();
   });
 
-  // Crewmates
+  // Crewmates floating in space
   if (playerImg.complete && playerImg.naturalWidth > 0) {
+    const W = innerWidth, H = innerHeight;
     crews.forEach(c => {
       c.x += c.vx;
-      c.bob += 0.045;
-      const bob = Math.sin(c.bob) * 2.8;
-      if (c.x < -70) c.x = innerWidth + 70;
-      if (c.x > innerWidth + 70) c.x = -70;
+      c.y += c.vy;
+      c.angle += c.spin;
+      // Wrap around all edges
+      const pad = c.sz + 10;
+      if (c.x < -pad) c.x = W + pad;
+      if (c.x > W + pad) c.x = -pad;
+      if (c.y < -pad) c.y = H + pad;
+      if (c.y > H + pad) c.y = -pad;
+
+      const drawH = c.sz;
+      const drawW = drawH * CREW_W_RATIO;
 
       ctx.save();
-      ctx.globalAlpha = c.dead ? 0.18 : 0.62;
-      ctx.filter = `hue-rotate(${c.hue}deg) saturate(1.6) brightness(0.88)`;
-      const flip = c.vx > 0 ? 1 : -1;
-      ctx.translate(c.x, c.y + bob);
-      ctx.scale(flip, 1);
-      // crew.png is 512×512 square — draw centered at (0,0), anchored at feet
-      ctx.drawImage(playerImg, -c.sz / 2, -c.sz, c.sz, c.sz);
+      ctx.globalAlpha = c.dead ? 0.12 : c.alpha;
+      ctx.filter = `hue-rotate(${c.hue}deg) saturate(1.7) brightness(0.85)`;
+      ctx.translate(c.x, c.y);
+      ctx.rotate(c.angle);
+      // Flip to face direction of travel
+      if (c.vx < 0) ctx.scale(-1, 1);
+      ctx.drawImage(playerImg, -drawW / 2, -drawH / 2, drawW, drawH);
       ctx.restore();
     });
   }
@@ -1264,7 +1284,7 @@ const PHASE_LABELS = {
   GAME_OVER:'GAME OVER'
 };
 
-const CREW_CSS_FILTERS = HUE_OFFSETS.map(h => `hue-rotate(${h}deg) saturate(1.4) brightness(0.9)`);
+const CREW_CSS_FILTERS = ALL_HUES.map(h => `hue-rotate(${h}deg) saturate(1.4) brightness(0.9)`);
 
 // Fetch system phone on load
 fetch('/api/info').then(r=>r.json()).then(d => {
