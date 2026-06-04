@@ -42,27 +42,23 @@ class SaperlySMSTransport:
     def __init__(self, api_key: str, system_number: str):
         self._api_key = api_key
         self._system_number = system_number
-        try:
-            import saperly  # type: ignore
-            self._saperly = saperly
-        except ImportError as exc:
-            raise RuntimeError(
-                "saperly package not installed. Run: pip install saperly"
-            ) from exc
-
-    async def send(self, from_number: str, to_number: str, body: str) -> None:
-        await asyncio.to_thread(
-            self._saperly.messages.send,
-            from_=from_number,
-            to=to_number,
-            body=body,
+        self._client = httpx.AsyncClient(
+            base_url="https://api.saperly.com",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            timeout=15,
         )
 
+    async def send(self, from_number: str, to_number: str, body: str) -> None:
+        resp = await self._client.post("/v1/messages", json={"from": from_number, "to": to_number, "body": body})
+        resp.raise_for_status()
+
     async def provision_numbers(self, count: int) -> list[str]:
-        numbers = []
+        numbers: list[str] = []
         for _ in range(count):
-            number = await asyncio.to_thread(self._saperly.numbers.provision)
-            numbers.append(number)
+            resp = await self._client.post("/v1/numbers/provision")
+            resp.raise_for_status()
+            data = resp.json()
+            numbers.append(data.get("phone_number") or data.get("number") or data["data"]["phone_number"])
         return numbers
 
 

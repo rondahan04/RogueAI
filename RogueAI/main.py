@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agents import broadcast_ai_turns, run_game_master
@@ -79,6 +80,15 @@ _NAMES = ["Alex", "Maria", "Jordan", "Sam", "Chris", "Taylor", "Morgan", "Riley"
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="ROGUE")
+
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(_static_dir, exist_ok=True)
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+
+@app.get("/api/info")
+async def api_info():
+    return {"system_phone": SYSTEM_PHONE_NUMBER}
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -1004,4 +1014,419 @@ const interval = setInterval(poll, 3000);
 </script>
 </body>
 </html>""")
+
+
+# ---------------------------------------------------------------------------
+# Home — Game Command Center
+# ---------------------------------------------------------------------------
+
+_HOME_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RogueAI — Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Galindo&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#020617;--surface:rgba(10,18,40,0.88);--accent:#22C55E;
+  --accent-dim:rgba(34,197,94,0.12);--accent-glow:0 0 12px rgba(34,197,94,0.55),0 0 32px rgba(34,197,94,0.2);
+  --red:#EF4444;--amber:#F59E0B;--blue:#60A5FA;--purple:#A78BFA;
+  --border:rgba(51,65,85,0.7);--text:#F8FAFC;--muted:#94A3B8;
+  --font-h:'Galindo','Orbitron',monospace;--font-b:'JetBrains Mono',monospace
+}
+html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-family:var(--font-b);overflow-x:hidden}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.04) 2px,rgba(0,0,0,0.04) 4px);pointer-events:none;z-index:9999}
+#bg{position:fixed;inset:0;z-index:0}
+#app{position:relative;z-index:10;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem 1rem}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);padding:2.5rem;width:100%;max-width:860px;box-shadow:0 0 60px rgba(34,197,94,0.04),inset 0 1px 0 rgba(255,255,255,0.04)}
+.panel-header{text-align:center;margin-bottom:2rem}
+.logo-img{height:44px;width:auto;margin-bottom:.75rem;filter:drop-shadow(0 0 8px rgba(34,197,94,0.4));display:block;margin-left:auto;margin-right:auto}
+.panel-title{font-family:var(--font-h);font-size:clamp(1.6rem,4vw,2.8rem);font-weight:900;letter-spacing:.25em;color:var(--accent);text-shadow:var(--accent-glow)}
+.panel-sub{font-size:.65rem;color:var(--muted);letter-spacing:.18em;margin-top:.35rem;text-transform:uppercase}
+
+/* ── Launcher ── */
+.form-group{margin-bottom:.9rem}
+.form-label{display:block;font-size:.6rem;letter-spacing:.2em;color:var(--muted);text-transform:uppercase;margin-bottom:.35rem}
+.form-input{width:100%;background:rgba(2,6,23,.8);border:1px solid var(--border);border-radius:8px;padding:.75rem 1rem;font-family:var(--font-b);font-size:1rem;color:var(--text);outline:none;transition:border-color 200ms,box-shadow 200ms}
+.form-input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(34,197,94,.18)}
+.form-input::placeholder{color:var(--muted);opacity:.55}
+.btn-start{width:100%;margin-top:.4rem;padding:1rem;background:var(--accent);color:#020617;border:none;border-radius:8px;font-family:var(--font-h);font-size:.85rem;font-weight:700;letter-spacing:.2em;text-transform:uppercase;cursor:pointer;transition:transform 150ms,box-shadow 150ms}
+.btn-start:hover:not(:disabled){box-shadow:var(--accent-glow);transform:translateY(-1px)}
+.btn-start:active:not(:disabled){transform:translateY(0)}
+.btn-start:disabled{opacity:.45;cursor:not-allowed}
+.status-msg{margin-top:.9rem;text-align:center;font-size:.75rem;color:var(--muted);min-height:1.2em;letter-spacing:.05em}
+.status-msg.err{color:var(--red)}.status-msg.ok{color:var(--accent)}
+
+/* ── Dashboard ── */
+#dashboard{display:none}
+#dashboard.on{display:block}
+.dash-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem;margin-bottom:1.5rem;padding-bottom:1rem;border-bottom:1px solid var(--border)}
+.gid-label{font-size:.6rem;color:var(--muted);letter-spacing:.1em}
+.gid-label code{color:var(--text);background:rgba(255,255,255,.05);padding:.15em .5em;border-radius:4px;cursor:pointer;font-size:.75rem}
+.phase-badge{font-family:var(--font-h);font-size:.65rem;letter-spacing:.15em;padding:.35em .9em;border-radius:999px;border:1px solid currentColor;text-transform:uppercase;white-space:nowrap}
+.ph-EXPLORATION{color:var(--blue);box-shadow:0 0 10px rgba(96,165,250,.15)}
+.ph-EMERGENCY_MEETING{color:var(--amber);animation:pulseA 1s ease-in-out infinite}
+.ph-VOTING{color:var(--red);animation:pulseR .75s ease-in-out infinite}
+.ph-GAME_OVER{color:var(--purple);box-shadow:0 0 14px rgba(167,139,250,.25)}
+@keyframes pulseA{0%,100%{box-shadow:0 0 8px rgba(245,158,11,.2)}50%{box-shadow:0 0 20px rgba(245,158,11,.6)}}
+@keyframes pulseR{0%,100%{box-shadow:0 0 8px rgba(239,68,68,.25)}50%{box-shadow:0 0 22px rgba(239,68,68,.7)}}
+.round-label{font-size:.7rem;color:var(--muted)}
+.round-label span{color:var(--text);font-weight:500}
+
+/* ── Waiting ── */
+.waiting{text-align:center;padding:1.5rem 0}
+.pulse-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent);margin-right:8px;animation:pd 1.4s ease-in-out infinite;vertical-align:middle}
+@keyframes pd{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.65)}}
+.gid-box{margin:1rem 0;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:8px;padding:1rem}
+.gid-box strong{font-size:.58rem;letter-spacing:.18em;color:var(--muted);display:block;margin-bottom:.3rem}
+.gid-box span{color:var(--accent);font-size:.95rem;cursor:pointer;word-break:break-all}
+.sys-phone{font-size:.7rem;color:var(--muted);margin-top:.5rem}
+.sys-phone b{color:var(--accent)}
+
+/* ── Players grid ── */
+.players-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:.85rem;margin-bottom:1.5rem}
+.pcard{background:rgba(2,6,23,.6);border:1px solid var(--border);border-radius:12px;padding:.9rem .75rem;display:flex;flex-direction:column;align-items:center;gap:.4rem;transition:border-color .4s,opacity .4s;position:relative;overflow:hidden}
+.pcard.alive{border-color:rgba(34,197,94,.3)}
+.pcard.dead{opacity:.35;border-color:rgba(239,68,68,.15)}
+.pcard.dead::after{content:'✕';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:2.5rem;color:var(--red);opacity:.18;pointer-events:none}
+.pavatar{width:34px;height:auto;image-rendering:pixelated}
+.pname{font-family:var(--font-h);font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;text-align:center}
+.pstatus{font-size:.52rem;letter-spacing:.15em;text-transform:uppercase}
+.pcard.alive .pstatus{color:var(--accent)}.pcard.dead .pstatus{color:var(--red)}
+.prole{font-size:.55rem;padding:.12em .55em;border-radius:4px;letter-spacing:.1em;text-transform:uppercase;margin-top:.1rem}
+.r-imposter{background:rgba(239,68,68,.18);color:#FCA5A5;border:1px solid rgba(239,68,68,.3)}
+.r-crewmate{background:rgba(34,197,94,.1);color:#86EFAC;border:1px solid rgba(34,197,94,.2)}
+
+/* ── Game over banner ── */
+.gameover-banner{text-align:center;padding:1.5rem;background:rgba(167,139,250,.07);border:1px solid rgba(167,139,250,.25);border-radius:12px;margin-bottom:1.5rem}
+.gameover-banner h2{font-family:var(--font-h);font-size:1.1rem;letter-spacing:.2em;color:var(--purple);text-shadow:0 0 16px rgba(167,139,250,.5);margin-bottom:.5rem}
+.gameover-banner p{font-size:.75rem;color:var(--muted)}
+.btn-new{margin-top:1rem;padding:.6rem 1.6rem;background:transparent;border:1px solid var(--accent);color:var(--accent);border-radius:8px;font-family:var(--font-h);font-size:.7rem;letter-spacing:.15em;cursor:pointer;transition:background 150ms}
+.btn-new:hover{background:var(--accent-dim)}
+
+.panel-footer{text-align:center;margin-top:1.5rem;font-size:.55rem;color:rgba(148,163,184,.3);letter-spacing:.12em}
+@media(max-width:600px){.panel{padding:1.25rem .9rem}.players-grid{grid-template-columns:repeat(2,1fr)}.panel-title{font-size:1.6rem}}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div id="app">
+  <div class="panel">
+
+    <div class="panel-header">
+      <img class="logo-img" src="/static/logo.png" alt="ROGUE" onerror="this.style.display='none'">
+      <div class="panel-title">RogueAI</div>
+      <div class="panel-sub">AI social deception engine &mdash; SMS edition</div>
+    </div>
+
+    <!-- Launcher -->
+    <div id="launcher">
+      <div class="form-group">
+        <label class="form-label" for="inp-phone">Your Phone Number</label>
+        <input class="form-input" type="tel" id="inp-phone" placeholder="+1 (555) 000-0000" autocomplete="tel">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="inp-token">Game Token</label>
+        <input class="form-input" type="password" id="inp-token" placeholder="••••••••" autocomplete="off">
+      </div>
+      <button class="btn-start" id="btn-start" onclick="startGame()">&#9654; INITIATE GAME</button>
+      <div class="status-msg" id="status-msg"></div>
+    </div>
+
+    <!-- Dashboard -->
+    <div id="dashboard">
+
+      <!-- Waiting for player to text START -->
+      <div id="view-wait" class="waiting">
+        <p style="font-size:.8rem;color:var(--muted);margin-bottom:.25rem">
+          <span class="pulse-dot"></span>GAME CREATED &mdash; AWAITING YOUR FIRST SMS
+        </p>
+        <div class="gid-box">
+          <strong>GAME ID</strong>
+          <span id="gid-copy" onclick="copyId()" title="Click to copy"></span>
+        </div>
+        <p class="sys-phone">Text <b>START</b> to <b id="sys-phone-num">...</b> to begin</p>
+        <p style="font-size:.6rem;color:var(--muted);margin-top:.5rem">Dashboard auto-updates every 3 seconds</p>
+      </div>
+
+      <!-- Live game view -->
+      <div id="view-live" style="display:none">
+        <div id="gameover-banner" class="gameover-banner" style="display:none">
+          <h2 id="gameover-title">GAME OVER</h2>
+          <p id="gameover-sub"></p>
+          <button class="btn-new" onclick="resetToLauncher()">&#9654; NEW GAME</button>
+        </div>
+        <div class="dash-header">
+          <div class="gid-label">GAME: <code id="gid-live" onclick="copyId()" title="Copy ID"></code></div>
+          <span class="phase-badge" id="phase-badge">&mdash;</span>
+          <div class="round-label">ROUND <span id="round-num">&mdash;</span></div>
+        </div>
+        <div class="players-grid" id="players-grid"></div>
+      </div>
+
+    </div>
+
+    <div class="panel-footer">RogueAI &bull; AI SMS DECEPTION ENGINE &bull; AMONG US INSPIRED</div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  CANVAS: Starfield + Walking Crewmates
+// ═══════════════════════════════════════════════════════
+const canvas = document.getElementById('bg');
+const ctx = canvas.getContext('2d');
+
+function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
+resize();
+window.addEventListener('resize', resize);
+
+// Stars
+const stars = Array.from({length:200}, () => ({
+  x: Math.random(), y: Math.random(),
+  r: Math.random() * 1.3 + 0.3,
+  a: Math.random() * 0.7 + 0.2,
+  da: (Math.random() * 0.007 + 0.002) * (Math.random() > .5 ? 1 : -1)
+}));
+
+// Crewmate data
+const HUE_OFFSETS = [0, 220, 120, 280, 50, 25, 320, 180]; // red,blue,green,purple,yellow,orange,pink,cyan
+const crews = HUE_OFFSETS.map(h => ({
+  x: Math.random() * innerWidth,
+  y: innerHeight * 0.55 + Math.random() * innerHeight * 0.38,
+  vx: (Math.random() * 0.55 + 0.28) * (Math.random() > .5 ? 1 : -1),
+  bob: Math.random() * Math.PI * 2,
+  hue: h,
+  dead: false,
+  sz: 50 + Math.random() * 18
+}));
+
+const playerImg = new Image();
+playerImg.src = '/static/crew.png';
+
+function drawFrame() {
+  // Background gradient
+  const g = ctx.createRadialGradient(innerWidth/2, innerHeight/2, 0, innerWidth/2, innerHeight/2, Math.max(innerWidth,innerHeight)*.8);
+  g.addColorStop(0, '#0c1428');
+  g.addColorStop(1, '#020617');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Stars
+  stars.forEach(s => {
+    s.a += s.da;
+    if (s.a > .95 || s.a < .12) s.da *= -1;
+    ctx.beginPath();
+    ctx.arc(s.x * canvas.width, s.y * canvas.height, s.r, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(248,250,252,${s.a})`;
+    ctx.fill();
+  });
+
+  // Crewmates
+  if (playerImg.complete && playerImg.naturalWidth > 0) {
+    crews.forEach(c => {
+      c.x += c.vx;
+      c.bob += 0.045;
+      const bob = Math.sin(c.bob) * 2.8;
+      if (c.x < -70) c.x = innerWidth + 70;
+      if (c.x > innerWidth + 70) c.x = -70;
+
+      ctx.save();
+      ctx.globalAlpha = c.dead ? 0.18 : 0.62;
+      ctx.filter = `hue-rotate(${c.hue}deg) saturate(1.6) brightness(0.88)`;
+      const flip = c.vx > 0 ? 1 : -1;
+      ctx.translate(c.x, c.y + bob);
+      ctx.scale(flip, 1);
+      // crew.png is 512×512 square — draw centered at (0,0), anchored at feet
+      ctx.drawImage(playerImg, -c.sz / 2, -c.sz, c.sz, c.sz);
+      ctx.restore();
+    });
+  }
+
+  requestAnimationFrame(drawFrame);
+}
+requestAnimationFrame(drawFrame);
+
+// ═══════════════════════════════════════════════════════
+//  GAME STATE
+// ═══════════════════════════════════════════════════════
+let gameId = null;
+let pollTimer = null;
+let sysPhone = '';
+
+const PHASE_LABELS = {
+  EXPLORATION:'EXPLORING',
+  EMERGENCY_MEETING:'EMERGENCY',
+  VOTING:'VOTING',
+  GAME_OVER:'GAME OVER'
+};
+
+const CREW_CSS_FILTERS = HUE_OFFSETS.map(h => `hue-rotate(${h}deg) saturate(1.4) brightness(0.9)`);
+
+// Fetch system phone on load
+fetch('/api/info').then(r=>r.json()).then(d => {
+  sysPhone = d.system_phone || '';
+  document.getElementById('sys-phone-num').textContent = sysPhone;
+}).catch(() => {});
+
+function setStatus(msg, type='') {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.className = 'status-msg' + (type ? ' '+type : '');
+}
+
+async function startGame() {
+  const phone = document.getElementById('inp-phone').value.trim();
+  const token = document.getElementById('inp-token').value.trim();
+  if (!phone) { setStatus('Phone number required.', 'err'); return; }
+  if (!token) { setStatus('Game token required.', 'err'); return; }
+
+  const btn = document.getElementById('btn-start');
+  btn.disabled = true;
+  btn.textContent = 'INITIATING...';
+  setStatus('Contacting game server...');
+
+  try {
+    const res = await fetch('/game/start', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({phone, token})
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus(data.detail || 'Failed to start.', 'err');
+      btn.disabled = false; btn.textContent = '&#9654; INITIATE GAME';
+      return;
+    }
+    gameId = data.game_id;
+    showDashboard();
+    startPolling();
+  } catch(e) {
+    setStatus('Network error: '+e.message, 'err');
+    btn.disabled = false; btn.textContent = '&#9654; INITIATE GAME';
+  }
+}
+
+function showDashboard() {
+  document.getElementById('launcher').style.display = 'none';
+  const dash = document.getElementById('dashboard');
+  dash.className = 'on';
+  document.getElementById('gid-copy').textContent = gameId;
+  document.getElementById('gid-live').textContent = gameId;
+}
+
+function resetToLauncher() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  gameId = null;
+  document.getElementById('launcher').style.display = 'block';
+  document.getElementById('dashboard').className = '';
+  document.getElementById('view-wait').style.display = 'block';
+  document.getElementById('view-live').style.display = 'none';
+  document.getElementById('gameover-banner').style.display = 'none';
+  document.getElementById('players-grid').innerHTML = '';
+  document.getElementById('btn-start').disabled = false;
+  document.getElementById('btn-start').textContent = '&#9654; INITIATE GAME';
+  setStatus('');
+  crews.forEach(c => c.dead = false);
+}
+
+function copyId() {
+  if (gameId) navigator.clipboard.writeText(gameId).catch(()=>{});
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  doPoll();
+  pollTimer = setInterval(doPoll, 3000);
+}
+
+async function doPoll() {
+  if (!gameId) return;
+  try {
+    const res = await fetch('/api/game/'+gameId);
+    if (!res.ok) return;
+    const d = await res.json();
+    applyState(d);
+  } catch(_) {}
+}
+
+function applyState(state) {
+  const phase = state.phase;
+  const players = state.players || [];
+  const isOver = phase === 'GAME_OVER';
+
+  // Switch to live view if we have players
+  if (players.length > 0) {
+    document.getElementById('view-wait').style.display = 'none';
+    document.getElementById('view-live').style.display = 'block';
+  }
+
+  // Phase badge
+  const badge = document.getElementById('phase-badge');
+  badge.textContent = PHASE_LABELS[phase] || phase;
+  badge.className = 'phase-badge ph-'+phase;
+
+  // Round
+  document.getElementById('round-num').textContent = state.round_num || '—';
+
+  // Game over banner
+  if (isOver) {
+    const impostersAlive = players.filter(p => p.is_alive && p.role === 'imposter').length;
+    const banner = document.getElementById('gameover-banner');
+    const title = document.getElementById('gameover-title');
+    const sub = document.getElementById('gameover-sub');
+    banner.style.display = 'block';
+    if (impostersAlive === 0) {
+      title.textContent = 'CREWMATES WIN';
+      title.style.color = 'var(--accent)';
+      sub.textContent = 'All imposters ejected. The crew prevails.';
+    } else {
+      title.textContent = 'IMPOSTERS WIN';
+      title.style.color = 'var(--red)';
+      sub.textContent = 'Imposters overwhelm the crew. Mission failed.';
+    }
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  // Players grid
+  const grid = document.getElementById('players-grid');
+  if (players.length > 0) {
+    grid.innerHTML = players.map((p, i) => {
+      const alive = p.is_alive;
+      const filter = CREW_CSS_FILTERS[i % CREW_CSS_FILTERS.length];
+      const roleHtml = isOver
+        ? `<div class="prole ${p.role==='imposter'?'r-imposter':'r-crewmate'}">${p.role==='imposter'?'IMPOSTER':'CREW'}</div>`
+        : '';
+      return `<div class="pcard ${alive?'alive':'dead'}">
+        <img class="pavatar" src="/static/crew.png" style="filter:${filter}" alt="${p.name}" onerror="this.style.display='none'">
+        <div class="pname">${p.name}</div>
+        <div class="pstatus">${alive?'ALIVE':'EJECTED'}</div>
+        ${roleHtml}
+      </div>`;
+    }).join('');
+
+    // Sync background crewmate deaths
+    players.forEach((p, i) => {
+      if (crews[i]) crews[i].dead = !p.is_alive;
+    });
+  }
+
+  document.title = 'RogueAI — ' + (PHASE_LABELS[phase] || phase);
+}
+
+// Enter key support
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !gameId) startGame();
+});
+</script>
+</body>
+</html>"""
+
+
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return HTMLResponse(_HOME_HTML)
 
