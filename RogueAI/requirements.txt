@@ -7,3 +7,4 @@ pydantic
 httpx
 # saperly      # uncomment when Saperly programmatic provisioning is confirmed
 # twilio       # uncomment to use Twilio as SMS provider
+pytest
