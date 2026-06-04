@@ -154,7 +154,8 @@ async def send_system(state: GameState, body: str) -> None:
 async def send_player_action(state: GameState, player: Player, action) -> None:
     if not action.message_to_send:
         return
-    await transport.send(player.saperly_number, state.human_phone_number, action.message_to_send)
+    sms_body = f"[{player.name}]: {action.message_to_send}"
+    await transport.send(player.saperly_number, state.human_phone_number, sms_body)
     state.chat_history.append(
         MessageLog(
             sender_name=player.name,
@@ -287,9 +288,14 @@ class WebhookPayload(BaseModel):
 
 @app.post("/saperly/webhook")
 async def saperly_webhook(req: Request):
-    data = await req.form()
-    sender = str(data.get("From", data.get("from", "")))
-    body = str(data.get("Body", data.get("body", ""))).strip()
+    # Saperly sends JSON; fall back to form for other transports
+    ct = req.headers.get("content-type", "")
+    if "application/json" in ct:
+        data = await req.json()
+    else:
+        data = dict(await req.form())
+    sender = str(data.get("from") or data.get("From") or "")
+    body = str(data.get("text") or data.get("body") or data.get("Body") or "").strip()
     await _handle_inbound(sender, body)
     return {"status": "ok"}
 
@@ -1134,6 +1140,13 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
       </div>
       <button class="btn-start" id="btn-start" onclick="startGame()">&#9654; INITIATE GAME</button>
       <div class="status-msg" id="status-msg"></div>
+      <div style="margin-top:1.5rem;border-top:1px solid rgba(255,255,255,0.1);padding-top:1.25rem;">
+        <label class="form-label" for="inp-watch">Watch Existing Game</label>
+        <div style="display:flex;gap:.5rem;">
+          <input class="form-input" type="text" id="inp-watch" placeholder="Paste game ID..." autocomplete="off" style="flex:1;font-size:.75rem;">
+          <button class="btn-start" style="flex:0;padding:.55rem 1rem;font-size:.7rem;" onclick="watchGame()">WATCH</button>
+        </div>
+      </div>
     </div>
 
     <!-- Dashboard -->
@@ -1330,6 +1343,14 @@ async function startGame() {
   }
 }
 
+function watchGame() {
+  const id = document.getElementById('inp-watch').value.trim();
+  if (!id) return;
+  gameId = id;
+  showDashboard();
+  startPolling();
+}
+
 function showDashboard() {
   document.getElementById('launcher').style.display = 'none';
   const dash = document.getElementById('dashboard');
@@ -1421,7 +1442,7 @@ function applyState(state) {
         ? `<div class="prole ${p.role==='imposter'?'r-imposter':'r-crewmate'}">${p.role==='imposter'?'IMPOSTER':'CREW'}</div>`
         : '';
       return `<div class="pcard ${alive?'alive':'dead'}">
-        <img class="pavatar" src="/static/crew.png" style="filter:${filter}" alt="${p.name}" onerror="this.style.display='none'">
+        <img class="pavatar" src="/static/single_crew.png" style="filter:${filter}" alt="${p.name}" onerror="this.style.display='none'">
         <div class="pname">${p.name}</div>
         <div class="pstatus">${alive?'ALIVE':'EJECTED'}</div>
         ${roleHtml}

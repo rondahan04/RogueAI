@@ -35,31 +35,49 @@ class MockSMSTransport:
 
 class SaperlySMSTransport:
     """
-    Production transport using the Saperly SDK.
-    Verify programmatic number provisioning is supported before using.
+    Production transport using Saperly REST API (saperly.com/api/v1).
+    Single-line mode: all messages sent from the system line; player identity
+    is conveyed via a [Name]: prefix added by the caller.
     """
 
     def __init__(self, api_key: str, system_number: str):
         self._api_key = api_key
         self._system_number = system_number
+        self._line_id: str | None = None
         self._client = httpx.AsyncClient(
-            base_url="https://api.saperly.com",
+            base_url="https://saperly.com",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             timeout=15,
         )
 
+    async def _get_line_id(self) -> str:
+        if self._line_id:
+            return self._line_id
+        resp = await self._client.get("/api/v1/lines")
+        resp.raise_for_status()
+        lines = resp.json().get("lines", [])
+        for line in lines:
+            if line.get("phone_number") == self._system_number:
+                self._line_id = line["id"]
+                return self._line_id
+        # Fallback: use first active line
+        if lines:
+            self._line_id = lines[0]["id"]
+            return self._line_id
+        raise RuntimeError("No Saperly lines found — provision one at saperly.com")
+
     async def send(self, from_number: str, to_number: str, body: str) -> None:
-        resp = await self._client.post("/v1/messages", json={"from": from_number, "to": to_number, "body": body})
+        line_id = await self._get_line_id()
+        resp = await self._client.post(
+            "/api/v1/messages",
+            json={"line_id": line_id, "to": to_number, "text": body},
+        )
         resp.raise_for_status()
 
     async def provision_numbers(self, count: int) -> list[str]:
-        numbers: list[str] = []
-        for _ in range(count):
-            resp = await self._client.post("/v1/numbers/provision")
-            resp.raise_for_status()
-            data = resp.json()
-            numbers.append(data.get("phone_number") or data.get("number") or data["data"]["phone_number"])
-        return numbers
+        # Single-line mode: return the system number for every slot.
+        # Player identity is conveyed via [Name]: message prefix.
+        return [self._system_number] * count
 
 
 class TwilioSMSTransport:
