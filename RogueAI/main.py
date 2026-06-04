@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 
 from dotenv import load_dotenv
 
 load_dotenv()
+import json
 import random
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -22,6 +25,7 @@ from models import (
     GameState,
     MessageLog,
     Player,
+    PlayerHistory,
     PlayerRole,
 )
 from sms import SMSTransport, build_transport
@@ -36,6 +40,7 @@ SYSTEM_PHONE_NUMBER = os.getenv("SYSTEM_PHONE_NUMBER", "+15550000000")
 SMS_SEND_DELAY = float(os.getenv("SMS_SEND_DELAY", "0.5"))
 MAX_EXPLORATION_ROUNDS = int(os.getenv("MAX_EXPLORATION_ROUNDS", "3"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+GRUDGE_DIR = Path(os.getenv("GRUDGE_DIR", ".grudges"))
 
 _sms_config: dict[str, Any] = {
     "mock_webhook_url": os.getenv("BASE_URL", "http://localhost:8001") + "/internal/mock-webhook",
@@ -98,6 +103,39 @@ async def favicon():
 
 
 # ---------------------------------------------------------------------------
+# Grudge system — long-term memory per phone number
+# ---------------------------------------------------------------------------
+
+def _phone_slug(phone: str) -> str:
+    return re.sub(r"\D", "", phone)
+
+
+def _load_history(phone: str) -> PlayerHistory:
+    path = GRUDGE_DIR / f"{_phone_slug(phone)}.json"
+    if not path.exists():
+        return PlayerHistory()
+    try:
+        return PlayerHistory.model_validate_json(path.read_text())
+    except Exception:
+        print(f"[grudge] corrupted history for {phone} — resetting")
+        return PlayerHistory()
+
+
+def _save_history(phone: str, state: GameState, announcement: str) -> None:
+    try:
+        h = state.player_history or PlayerHistory()
+        h.games_played += 1
+        if state.voted_name:
+            h.votes_cast = (h.votes_cast + [state.voted_name])[-10:]
+        if "CREWMATES WIN" in announcement:
+            h.crewmates_wins += 1
+        GRUDGE_DIR.mkdir(exist_ok=True)
+        (GRUDGE_DIR / f"{_phone_slug(phone)}.json").write_text(h.model_dump_json())
+    except Exception as exc:
+        print(f"[grudge] failed to save history for {phone}: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Game initialisation
 # ---------------------------------------------------------------------------
 
@@ -124,6 +162,7 @@ async def initialize_game(human_phone: str) -> GameState:
         human_phone_number=human_phone,
         system_phone_number=SYSTEM_PHONE_NUMBER,
         players=players,
+        player_history=_load_history(human_phone),
     )
     games[state.game_id] = state
 
@@ -226,6 +265,7 @@ async def resolve_vote(state: GameState, voted_name: str) -> None:
         return
 
     target.is_alive = False
+    state.voted_name = target.name  # record for grudge history
     await send_system(
         state,
         f"{target.name} has been ejected. They were a {target.role.value}.",
@@ -247,7 +287,10 @@ async def resolve_vote(state: GameState, voted_name: str) -> None:
 
 
 async def end_game(state: GameState, announcement: str) -> None:
+    if state.phase == GamePhase.GAME_OVER:
+        return  # prevent double-call
     state.phase = GamePhase.GAME_OVER
+    _save_history(state.human_phone_number, state, announcement)
     receipts_url = os.getenv("BASE_URL", "http://localhost:8001") + f"/receipts/{state.game_id}"
     await send_system(state, f"{announcement}")
     await send_system(state, f"Game Over. View the AI's secret thoughts: {receipts_url}")
@@ -407,6 +450,22 @@ async def receipts(game_id: str):
         for p in state.players
     )
 
+    # Load grudge history for the track record section
+    history = _load_history(state.human_phone_number)
+    if history.games_played > 0:
+        accuracy = f"{history.crewmates_wins}/{history.games_played}"
+        votes_str = ", ".join(history.votes_cast) if history.votes_cast else "none"
+        track_record_html = f"""
+<div style="background:#fff8e1;border:1px solid #f9a825;border-radius:8px;padding:16px;margin-bottom:24px;">
+  <strong>📋 Your Track Record</strong><br>
+  <span style="color:#555;">Games played before this one: <b>{history.games_played}</b></span><br>
+  <span style="color:#555;">Crewmate wins: <b>{accuracy}</b></span><br>
+  <span style="color:#555;">Past ejection votes: <b>{votes_str}</b></span><br>
+  <span style="color:#888;font-size:0.85em;">The AIs knew this. They were watching.</span>
+</div>"""
+    else:
+        track_record_html = ""
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -426,6 +485,8 @@ async def receipts(game_id: str):
 <body>
 <h1>🕵️ ROGUE — The Receipts</h1>
 <p>Game ID: <code>{game_id}</code> &nbsp;|&nbsp; Status: <strong>{state.phase.value}</strong></p>
+
+{track_record_html}
 
 <h2>Players</h2>
 <table>

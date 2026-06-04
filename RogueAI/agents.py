@@ -101,9 +101,19 @@ async def run_player_turn(player: Player, state: GameState) -> AgentAction:
         if player.role == PlayerRole.IMPOSTER
         else "You are a CREWMATE. Find inconsistencies. Accuse logically."
     )
+    h = state.player_history
+    grudge_context = ""
+    if h and h.games_played > 0:
+        votes_str = ", ".join(h.votes_cast) if h.votes_cast else "none yet"
+        grudge_context = (
+            f" The human observer has played {h.games_played} game(s) before this one. "
+            f"Their past ejection votes: {votes_str}. "
+            f"Crewmates won {h.crewmates_wins} of those {h.games_played} game(s). "
+            f"Use this to personalise your strategy — reference past betrayals, patterns, or trust."
+        )
     prompt = (
         f"You are {player.name}. Personality: {player.personality}. "
-        f"{role_instruction} "
+        f"{role_instruction}{grudge_context} "
         f"Take your turn now."
     )
     try:

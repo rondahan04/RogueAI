@@ -36,6 +36,13 @@ class MessageLog(BaseModel):
     internal_reasoning: str | None = None
 
 
+class PlayerHistory(BaseModel):
+    """Persisted across games for a given phone number — used by The Grudge system."""
+    games_played: int = 0
+    votes_cast: list[str] = Field(default_factory=list)  # capped at last 10
+    crewmates_wins: int = 0
+
+
 class GameState(BaseModel):
     game_id: str
     human_phone_number: str
@@ -46,6 +53,8 @@ class GameState(BaseModel):
     chat_history: list[MessageLog] = Field(default_factory=list)
     killer_target_cooldown: int = 0
     is_processing: bool = False  # guard against concurrent webhook triggers
+    player_history: PlayerHistory | None = None  # None on first game
+    voted_name: str | None = None  # last name the human voted for; saved to history
 
 
 # --- Agent output types ---
